@@ -1,4 +1,6 @@
 import sqlite3  #Import SQLite module to interact with a database
+import random 
+import string
 
 #Initialize seating with 6 rows (A-F) and 80 columns (1-80)
 def initialize_seats():
@@ -16,6 +18,12 @@ def create_db():
                         seat_id TEXT PRIMARY KEY,
                         status TEXT,
                         customer_name TEXT)''')
+　　 #Create the "bookings" table if it does not already exist
+    cursor.execute('''CREATE TABLE IF NOT EXISTS bookings (
+                      reference TEXT PRIMARY KEY, 
+                      customer_name TEXT,
+                      passport_number TEXT,
+                      seat_id TEXT)''')
     conn.commit()  #Commit the changes to the database
     return conn, cursor  # Return the connection and cursor for use in other functions
 
@@ -44,6 +52,18 @@ def save_seats_to_db(conn, cursor, seats):
                        (seat_id, seat_info["status"], seat_info["customer"]["name"] if seat_info["customer"] else None))
     conn.commit()  #Commit the changes to the database to save them
 
+#Function to generate a unique booking reference
+def generate_booking_reference(cursor):
+    while True:
+        #Generate a random alphanumeric reference with 8 characters
+        booking_reference=''.join(random.choices(string.ascii_uppercase+string.digits, k=8))
+        #Check if the generated reference already exists in the database
+        cursor.execute("SELECT COUNT(*) FROM bookings WHERE reference=?",(booking_reference,))
+        #IF no rows are returned, it means the reference is unique
+        if cursor.fetchone()[0]==0:
+            break #Exit the loop if the reference is unique
+    return booking_reference
+
 #Function to display the seat availability in a table format
 def check_availability(seats):
     print("\nAvailable Seats:")
@@ -59,7 +79,7 @@ def check_availability(seats):
 
 
 #Function to book one or more seats
-def book_seat(seats):
+def book_seat(seats,cursor):
     #Prompt the user to enter seat(s) to book, split input by commas
     seats_to_book=input("Enter seat(s) to book (e.g., 1A, 2B, 3C): ").split(',')
     booked_seats=[]  #Initialize a list to keep track of successfully booked seats
@@ -70,17 +90,23 @@ def book_seat(seats):
         if seat in seats:  # Check if the seat exists in the dictionary
             if seats[seat]["status"] == "F":  # Check if the seat is free
                 print(f"Selected Seat: {seat}")
-                # Ask for the customer's name
-                customer_name = input("Enter customer name: ")
+                # Ask for the customer's details (first name, last name, passport number)
+                passport_number=input("Enter passport number:")
+                customer_name=input("Enter full name:")
+                #Generate a unique booking reference
+                booking_reference=generate_booking_reference(cursor)
+                print(f"Booking reference:{booking_reference}")
                 # Update the seat status to 'R' for reserved, and store the customer information
-                seats[seat]["status"] = "R"
-                seats[seat]["customer"] = {"name": customer_name}
+                seats[seat]["status"]=booking_reference
+                seats[seat]["customer"] = {"name": customer_name, "passport":passport_number,"reference":booking_reference}
+                #Insert the booking details into the database
+                cursor.execute("INSERT INTO bookings (reference,customer_name,passport_number,seat_id) VALUES (?,?,?,?)", (booking_reference,customer_name,passport_number,seat))
                 booked_seats.append(seat)  # Add the booked seat to the list
                 print(f"Seat {seat} has been successfully booked for {customer_name}.")
             else:
-                print(f"Seat {seat} is already booked.")  # Inform the user if the seat is already reserved
+                print(f"Seat {seat} is already booked.")  #Inform the user if the seat is already reserved
         else:
-            print(f"Invalid seat {seat}.")  # Inform the user if the seat is not valid
+            print(f"Invalid seat {seat}.")  #Inform the user if the seat is not valid
     
     #If there are booked seats, display a success message
     if booked_seats:
@@ -89,11 +115,13 @@ def book_seat(seats):
         print("No valid seats were booked.")
 
 #Function to free a seat
-def free_seat(seats):
+def free_seat(seats,cursor):
     #Prompt the user to enter the seat they want to free
     seat_to_free=input("Enter seat to free (e.g., 1A, 2B, 3C): ").strip().upper()
     if seat_to_free in seats:  #Check if the seat exists in the dictionary
-        if seats[seat_to_free]["status"]=="R":  #Check if the seat is reserved
+        if seats[seat_to_free]["status"]!="F":  #Check if the seat is reserved
+            #Remove the booking details from the database
+            cursor.execute("DELETE FROM bookings WHERE seat_id=?", (seat_to_free,))
             #Update the seat status to 'F' for free and remove the customer information
             seats[seat_to_free]["status"]="F"
             seats[seat_to_free]["customer"]=None
@@ -106,12 +134,12 @@ def free_seat(seats):
 #Function to show booking status for a specific customer
 def show_booking_status(seats):
     #Prompt the user to enter the customer's name
-    customer_name=input("Enter customer name to check booking status: ").strip()
+    customer_name=input("Enter customer full name to check booking status:").strip()
     found=False  #Flag to track if any booking was found for the customer
     #Loop through each seat in the seats dictionary
     for seat_id, seat_info in seats.items():
         #If the seat is reserved and the customer's name matches, display the booking details
-        if seat_info["status"]=="R" and seat_info["customer"] and seat_info["customer"]["name"].lower()==customer_name.lower():
+        if seat_info["status"]!="F" and seat_info["customer"] and seat_info["customer"]["name"].lower()==customer_name.lower():
             found=True
             print(f"Seat {seat_id}: Booked by {seat_info['customer']['name']}")
     
