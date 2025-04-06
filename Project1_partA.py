@@ -1,183 +1,175 @@
-import sqlite3  #Import SQLite module to interact with a database
-import random 
+import sqlite3 #Import SQLite module to interact with a database
+import random
 import string
 
-#Initialize seating with 6 rows (A-F) and 80 columns (1-80)
-def initialize_seats():
-    rows=['A', 'B', 'C', 'D', 'E', 'F']   #Define row labels A to F
-    columns=range(1, 81)  #Define column numbers 1 to 80
-    #Return a dictionary where each key is the seat ID (e.g., "1A"), and the value is a dictionary with status and customer info
-    return {f"{col}{row}": {"status": "F", "customer": None} for row in rows for col in columns}
+#Seat class:Manages seat information and operations
+class Seat:
+    def __init__(self, seat_id):
+        self.seat_id=seat_id  #Seat ID (e.g.,'1A','2B')
+        self.status="F"  #"F"=Free, "R"=Reserved, booking reference if reserved
+        self.customer=None  #No customer assigned initially
 
-#Database connection setup
-def create_db():
-    conn=sqlite3.connect('booking_system.db')  #Create (or connect to) an SQLite database file
-    cursor=conn.cursor()  #Create a cursor object to execute SQL queries
-    #Create the 'seats' table if it doesn't already exist
-    cursor.execute('''CREATE TABLE IF NOT EXISTS seats (
-                        seat_id TEXT PRIMARY KEY,
-                        status TEXT,
-                        customer_name TEXT)''')
-　　 #Create the "bookings" table if it does not already exist
-    cursor.execute('''CREATE TABLE IF NOT EXISTS bookings (
-                      reference TEXT PRIMARY KEY, 
-                      customer_name TEXT,
-                      passport_number TEXT,
-                      seat_id TEXT)''')
-    conn.commit()  #Commit the changes to the database
-    return conn, cursor  # Return the connection and cursor for use in other functions
-
-#Load seats data from the database
-def load_seats_from_db(cursor):
-    #Execute a query to retrieve all seat data from the 'seats' table
-    cursor.execute("SELECT seat_id, status, customer_name FROM seats")
-    rows=cursor.fetchall()  #Fetch all results from the query
-    seats=initialize_seats()  #Initialize default seats in case the database is empty
-
-    #Loop through the rows and update the 'seats' dictionary with the data from the database
-    for row in rows:
-        seat_id, status, customer_name = row  #Unpack each row into seat_id, status, and customer_name
-        #If the seat has a customer name, store it in the dictionary
-        seats[seat_id]={"status": status, "customer": {"name": customer_name} if customer_name else None}
+    def is_free(self):
+        return self.status=="F"  #Return True if the seat is free (status "F")
     
-    return seats  #Return the updated seats dictionary
+    def reserve(self, customer_name, passport_number, booking_reference):
+        #Reserve the seat by changing status to the booking reference and storing customer info
+        self.status=booking_reference
+        self.customer={"name": customer_name, "passport": passport_number, "reference": booking_reference}
 
-#Save seat data to the database
-def save_seats_to_db(conn, cursor, seats):
-    #Loop through each seat in the 'seats' dictionary
-    for seat_id, seat_info in seats.items():
-        # Insert or update the seat information in the database
-        cursor.execute('''INSERT OR REPLACE INTO seats (seat_id, status, customer_name)
-                          VALUES (?, ?, ?)''', 
-                       (seat_id, seat_info["status"], seat_info["customer"]["name"] if seat_info["customer"] else None))
-    conn.commit()  #Commit the changes to the database to save them
+    def free(self):
+        #Free the seat by resetting status and removing customer info
+        self.status="F"
+        self.customer=None
 
-#Function to generate a unique booking reference
-def generate_booking_reference(cursor):
-    while True:
-        #Generate a random alphanumeric reference with 8 characters
-        booking_reference=''.join(random.choices(string.ascii_uppercase+string.digits, k=8))
-        #Check if the generated reference already exists in the database
-        cursor.execute("SELECT COUNT(*) FROM bookings WHERE reference=?",(booking_reference,))
-        #IF no rows are returned, it means the reference is unique
-        if cursor.fetchone()[0]==0:
-            break #Exit the loop if the reference is unique
-    return booking_reference
+#Booking class: Manages the booking information
+class Booking:
+    def __init__(self, reference, customer_name, passport_number, seat):
+        self.reference=reference  #Booking reference (unique identifier)
+        self.customer_name=customer_name  #Customer's full name
+        self.passport_number=passport_number  #Customer's passport number
+        self.seat=seat  #The seat associated with the booking
 
-#Function to display the seat availability in a table format
-def check_availability(seats):
-    print("\nAvailable Seats:")
-    #Print column numbers for easier reference (1 to 80)
-    print("Row " + " ".join([str(i) for i in range(1, 81)]))
-    #Loop through each row (A to F)
-    for row in ['A', 'B', 'C', 'D', 'E', 'F']:
-        #For each row, loop through columns (1 to 80) and check if the seat is free (status = "F")
-        row_display = [f"{col}{row}" if seats[f"{col}{row}"]['status']=="F" else "  " for col in range(1, 81)]
-        #Print the row and the availability of each seat in that row
-        print(f"{row}  " + " ".join(row_display))
-    print("\n")
+    def save(self, cursor):
+        #Save the booking information into the database
+        cursor.execute("INSERT INTO bookings (reference, customer_name, passport_number, seat_id) VALUES (?, ?, ?, ?)",
+                       (self.reference, self.customer_name, self.passport_number, self.seat.seat_id))
 
+#Database class: Manages interactions with the SQLite database
+class Database:
+    def __init__(self, db_name='booking_system.db'):
+        self.conn=sqlite3.connect(db_name)  #Connect to the database
+        self.cursor=self.conn.cursor()  #Create a cursor to execute SQL queries
+        self.create_tables()  #Create tables if they don't exist
 
-#Function to book one or more seats
-def book_seat(seats,cursor):
-    #Prompt the user to enter seat(s) to book, split input by commas
-    seats_to_book=input("Enter seat(s) to book (e.g., 1A, 2B, 3C): ").split(',')
-    booked_seats=[]  #Initialize a list to keep track of successfully booked seats
-    
-    #Loop through each seat entered by the user
-    for seat in seats_to_book:
-        seat = seat.strip().upper()  # Remove leading/trailing spaces and convert to uppercase
-        if seat in seats:  # Check if the seat exists in the dictionary
-            if seats[seat]["status"] == "F":  # Check if the seat is free
-                print(f"Selected Seat: {seat}")
-                # Ask for the customer's details (first name, last name, passport number)
-                passport_number=input("Enter passport number:")
-                customer_name=input("Enter full name:")
-                #Generate a unique booking reference
-                booking_reference=generate_booking_reference(cursor)
-                print(f"Booking reference:{booking_reference}")
-                # Update the seat status to 'R' for reserved, and store the customer information
-                seats[seat]["status"]=booking_reference
-                seats[seat]["customer"] = {"name": customer_name, "passport":passport_number,"reference":booking_reference}
-                #Insert the booking details into the database
-                cursor.execute("INSERT INTO bookings (reference,customer_name,passport_number,seat_id) VALUES (?,?,?,?)", (booking_reference,customer_name,passport_number,seat))
-                booked_seats.append(seat)  # Add the booked seat to the list
-                print(f"Seat {seat} has been successfully booked for {customer_name}.")
-            else:
-                print(f"Seat {seat} is already booked.")  #Inform the user if the seat is already reserved
+    def create_tables(self):
+        #Create 'seats' table if it doesn't exist
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS seats (
+                                seat_id TEXT PRIMARY KEY,
+                                status TEXT,
+                                customer_name TEXT)''')
+        #Create 'bookings' table if it doesn't exist
+        self.cursor.execute('''CREATE TABLE IF NOT EXISTS bookings (
+                                reference TEXT PRIMARY KEY, 
+                                customer_name TEXT,
+                                passport_number TEXT,
+                                seat_id TEXT)''')
+        self.conn.commit()  #Commit the changes to the database
+
+    def load_seats(self):
+        #Load all seats from the database into a dictionary
+        self.cursor.execute("SELECT seat_id, status, customer_name FROM seats")
+        rows=self.cursor.fetchall()  # Fetch all rows from the seats table
+        seats={}  #Dictionary to store Seat objects
+        for row in rows:
+            seat_id, status, customer_name=row  #Extract seat details from each row
+            seat=Seat(seat_id)  #Create a new Seat object for each row
+            seat.status=status  #Set the seat's status
+            if customer_name:
+                seat.customer={"name": customer_name}  #Assign customer information if available
+            seats[seat_id]=seat  #Add the seat to the dictionary
+        return seats  #Return the dictionary of seats
+
+    def save_seat(self, seat):
+        #Save the updated seat information to the database
+        self.cursor.execute('''INSERT OR REPLACE INTO seats (seat_id, status, customer_name)
+                               VALUES (?, ?, ?)''', 
+                               (seat.seat_id, seat.status, seat.customer["name"] if seat.customer else None))
+        self.conn.commit()  #Commit the changes to the database
+
+    def close(self):
+        #Close the database connection
+        self.conn.close()
+
+#ReservationSystem class: Manages the entire reservation system
+class ReservationSystem:
+    def __init__(self):
+        self.database=Database()  #Create a Database object to interact with the database
+        self.seats=self.database.load_seats()  #Load all seats into the system
+
+    def generate_booking_reference(self):
+        #Generate a unique booking reference
+        while True:
+            booking_reference=''.join(random.choices(string.ascii_uppercase + string.digits, k=8))  #Random 8-character reference
+            self.database.cursor.execute("SELECT COUNT(*) FROM bookings WHERE reference=?",(booking_reference,))
+            if self.database.cursor.fetchone()[0]==0:  #Check if the reference is unique
+                return booking_reference  #Return the unique booking reference
+
+    def book_seat(self, seat_id,customer_name,passport_number):
+        #Book a seat if it's available
+        seat=self.seats.get(seat_id)  #Get the Seat object based on seat_id
+        if seat and seat.is_free():  #If the seat exists and is free
+            booking_reference=self.generate_booking_reference()  #Generate a unique booking reference
+            seat.reserve(customer_name, passport_number, booking_reference)  #Reserve the seat
+            booking=Booking(booking_reference, customer_name, passport_number, seat)  #Create a Booking object
+            booking.save(self.database.cursor)  #Save the booking to the database
+            self.database.save_seat(seat)  #Save the seat's updated status to the database
+            print(f"Seat {seat_id} has been successfully booked for {customer_name}.")
         else:
-            print(f"Invalid seat {seat}.")  #Inform the user if the seat is not valid
-    
-    #If there are booked seats, display a success message
-    if booked_seats:
-        print(f"Seats {', '.join(booked_seats)} have been successfully booked.")
-    else:
-        print("No valid seats were booked.")
+            print(f"Seat {seat_id} is not available or invalid.")  #If the seat is not available or invalid
 
-#Function to free a seat
-def free_seat(seats,cursor):
-    #Prompt the user to enter the seat they want to free
-    seat_to_free=input("Enter seat to free (e.g., 1A, 2B, 3C): ").strip().upper()
-    if seat_to_free in seats:  #Check if the seat exists in the dictionary
-        if seats[seat_to_free]["status"]!="F":  #Check if the seat is reserved
-            #Remove the booking details from the database
-            cursor.execute("DELETE FROM bookings WHERE seat_id=?", (seat_to_free,))
-            #Update the seat status to 'F' for free and remove the customer information
-            seats[seat_to_free]["status"]="F"
-            seats[seat_to_free]["customer"]=None
-            print(f"Seat {seat_to_free} has been freed.")
+    def free_seat(self, seat_id):
+        #Free a reserved seat
+        seat=self.seats.get(seat_id)  #Get the Seat object based on seat_id
+        if seat and not seat.is_free():  #If the seat is reserved
+            seat.free()  #Free the seat
+            self.database.save_seat(seat)  # ave the seat's updated status to the database
+            print(f"Seat {seat_id} has been freed.")
         else:
-            print(f"Seat {seat_to_free} is not currently booked.")  #Inform the user if the seat is not reserved
-    else:
-        print(f"Invalid seat {seat_to_free}.")  #Inform the user if the seat is not valid
+            print(f"Seat {seat_id} is already free or invalid.")  #If the seat is already free or invalid
 
-#Function to show booking status for a specific customer
-def show_booking_status(seats):
-    #Prompt the user to enter the customer's name
-    customer_name=input("Enter customer full name to check booking status:").strip()
-    found=False  #Flag to track if any booking was found for the customer
-    #Loop through each seat in the seats dictionary
-    for seat_id, seat_info in seats.items():
-        #If the seat is reserved and the customer's name matches, display the booking details
-        if seat_info["status"]!="F" and seat_info["customer"] and seat_info["customer"]["name"].lower()==customer_name.lower():
-            found=True
-            print(f"Seat {seat_id}: Booked by {seat_info['customer']['name']}")
-    
-    #If no booking was found, inform the user
-    if not found:
-        print(f"No booking found for {customer_name}.")
-    print("\n")
+    def show_booking_status(self, customer_name):
+        #Show the booking status for a customer by name
+        found=False
+        for seat in self.seats.values():  #Iterate through all the seats
+            if seat.customer and seat.customer["name"].lower()==customer_name.lower():  #Check if the customer matches
+                found=True
+                print(f"Seat {seat.seat_id}: Booked by {seat.customer['name']}")  #Display the booking details
+        if not found:
+            print(f"No booking found for {customer_name}.")  #If no booking found for the customer
 
-#Main menu to interact with the user
-def main_menu():
-    conn, cursor = create_db()  # Create database connection and cursor
-    seats = load_seats_from_db(cursor)  # Load seat data from the database
+    def check_availability(self):
+        #Display available seats
+        print("\nAvailable Seats:")
+        for row in ['A', 'B', 'C', 'D', 'E', 'F']:  #Loop through rows A-F
+            available_seats=[f"{col}{row}" for col in range(1, 81) if self.seats[f"{col}{row}"].is_free()]  # Check available seats
+            print(f"{row}: {' '.join(available_seats)}")  #Print available seats for the row
 
+    def save_changes(self):
+        #Close the database connection and save changes
+        self.database.close()
+
+#Main execution
+if __name__ == "__main__":
+    system = ReservationSystem()  #Create a ReservationSystem object
+
+    #Interactive menu loop
     while True:
-        # Display menu options to the user
-        print("Menu:")
+        print("\nMenu:")
         print("1. Check availability of seat")
-        print("2. Book seat(s)")
+        print("2. Book a seat")
         print("3. Free a seat")
         print("4. Show booking status")
-        print("5. Exit program")
-        choice = input("Select an option: ")
-
-        # Handle user choice
-        if choice == "1":
-            check_availability(seats)  # Check seat availability
-        elif choice == "2":
-            book_seat(seats)  # Book one or more seats
-        elif choice == "3":
-            free_seat(seats)  # Free a reserved seat
-        elif choice == "4":
-            show_booking_status(seats)  # Show booking status for a specific customer
-        elif choice == "5":
-            save_seats_to_db(conn, cursor, seats)  # Save updated seat data to the database before exiting
-            print("Exiting program.")
-            break  # Exit the loop and terminate the program
+        print("5. Exit")
+        choice = input("Enter choice: ")
+        
+        if choice=='1':
+            system.check_availability() #Option to check seat availability
+        elif choice=='2':
+            seat_id=input("Enter seat ID to book: ") #Input for seat ID
+            customer_name=input("Enter name:") #Input for customer name
+            passport_number=input("Enter passport number: ") #Input for passport number
+            system.book_seat(seat_id, customer_name, passport_number) #Book the seat
+        elif choice=='3':
+            seat_id=input("Enter seat ID to free: ") #Input for seat ID
+            system.free_seat(seat_id) #Free the seat
+        elif choice=='4':
+            customer_name=input("Enter customer name to check status: ") #Input for customer name 
+            system.show_booking_status(customer_name) #Show booking status for customer
+        elif choice=='5':
+            system.save_changes() #Save changes and close the program
+            print("Exiting...")
+            break #Exit the program
         else:
-            print("Invalid option, please choose again.")  # Handle invalid menu options
+            print("Invalid choice. Please try again.") #Handle invalid choices
 
-if __name__ == "__main__":
-    main_menu()  #Start the program
